@@ -63,7 +63,7 @@ pipeline {
                             docker stop gutendex-app || true &&
                             docker rm gutendex-app || true &&
                             cd $REMOTE_APP_DIR &&
-                            docker run -d --env-file .env --name gutendex-app -p 8080:8000 $DOCKER_IMAGE
+                            docker run -d --env-file .env --name gutendex-app -p 8000:8000 $DOCKER_IMAGE
                         '
                     """
                 }
