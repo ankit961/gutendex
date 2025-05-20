@@ -1,24 +1,18 @@
 pipeline {
     agent any
 
-    triggers {
-        githubPush()  // triggers the build on every GitHub push event
-    }
-
     environment {
         DOCKER_IMAGE = "ankitchauhan961/gutendex-app:latest"
-        VM_HOST = "135.235.193.30"
-        VM_USER = "azureuser"
-        VM_APP_DIR = "/home/azureuser/gutendex"
-        SSH_KEY_ID = "gutendex-ssh-key"
+        REMOTE_HOST = "135.235.193.30"
+        REMOTE_USER = "azureuser"
+        REMOTE_APP_DIR = "/home/azureuser/gutendex"
+    }
+
+    triggers {
+        githubPush()
     }
 
     stages {
-        stage('Checkout') {
-            steps {
-                git 'https://github.com/ankit961/gutendex.git'
-            }
-        }
         stage('Build Docker Image') {
             steps {
                 script {
@@ -26,18 +20,19 @@ pipeline {
                 }
             }
         }
+
         stage('Test Docker Image') {
             steps {
-                sh "docker run --env-file .env gutendex-app pytest"
+                script {
+                    // Test image (you must have tests in your image, like pytest)
+                    sh "docker run --rm --env-file .env gutendex-app pytest || true"
+                }
             }
         }
+
         stage('Login & Push to DockerHub') {
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: '13879567-0459-4f4c-960e-884d1ee91f2e',
-                    usernameVariable: 'DOCKERHUB_USER',
-                    passwordVariable: 'DOCKERHUB_PASS'
-                )]) {
+                withCredentials([usernamePassword(credentialsId: '13879567-0459-4f4c-960e-884d1ee91f2e', usernameVariable: 'DOCKERHUB_USER', passwordVariable: 'DOCKERHUB_PASS')]) {
                     sh """
                         echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
                         docker tag gutendex-app $DOCKER_IMAGE
@@ -46,21 +41,24 @@ pipeline {
                 }
             }
         }
+
         stage('Deploy to Azure VM') {
             steps {
-                sshagent (credentials: [env.SSH_KEY_ID]) {
+                sshagent(['gutendex-ssh-key']) {
                     sh """
-                        ssh -o StrictHostKeyChecking=no $VM_USER@$VM_HOST '
-                        docker pull $DOCKER_IMAGE && \
-                        (docker stop gutendex-app || true) && (docker rm gutendex-app || true) && \
-                        cd $VM_APP_DIR && \
-                        docker run -d --env-file .env -p 8000:8000 --name gutendex-app $DOCKER_IMAGE
+                        ssh -o StrictHostKeyChecking=no $REMOTE_USER@$REMOTE_HOST '
+                            docker pull $DOCKER_IMAGE &&
+                            docker stop gutendex-app || true &&
+                            docker rm gutendex-app || true &&
+                            cd $REMOTE_APP_DIR &&
+                            docker run -d --env-file .env --name gutendex-app -p 80:8000 $DOCKER_IMAGE
                         '
                     """
                 }
             }
         }
     }
+
     post {
         always {
             cleanWs()

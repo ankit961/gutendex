@@ -1,27 +1,26 @@
-# Use official Python image as base
-FROM python:3.11-slim
+# ---- Base image with Python ----
+FROM python:3.9-slim
 
-# System-level dependencies 
+# ---- System dependencies ----
 RUN apt-get update && apt-get install -y \
     build-essential \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
+# ---- Set workdir ----
 WORKDIR /app
 
-# Copy requirements if available
+# ---- Copy requirements first for caching ----
 COPY requirements.txt .
 
-# Install dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# ---- Install Python dependencies ----
+RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# ---- Copy app source code ----
 COPY . .
 
-# Expose port
+# ---- Expose FastAPI port ----
 EXPOSE 8000
 
-# Start the application with uvicorn
+# ---- Entrypoint ----
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-
