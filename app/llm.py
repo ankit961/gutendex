@@ -29,8 +29,12 @@ def get_llm_pipeline():
 
 def query_to_filter(query: str) -> dict:
     prompt = (
-        "Given a user's question about books, output a JSON filter object with keys: author, title, language, topic, mime_type, ids. "
-        "Only use relevant keys, leave others out. "
+        "Given a user's question about books, output a JSON object for database filtering. "
+        "Allowed keys: author, title, language, topic, mime_type, ids, sort, limit. "
+        "Only include a key if the user query directly specifies it. "
+        "If the user asks for 'most downloaded', 'latest', or similar, use the 'sort' key (e.g., 'sort': 'download_count:desc') and 'limit' if needed. "
+        "Never invent author, title, or ids. "
+        "If the query is general or ambiguous, return an empty object {}. "
         f"Question: {query}\n"
         "JSON:"
     )
