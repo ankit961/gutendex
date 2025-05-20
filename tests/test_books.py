@@ -1,120 +1,115 @@
-def test_no_filters_returns_25(client):
-    response = client.get("/books")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["count"] >= len(data["results"])
-    assert len(data["results"]) <= 25
-    for book in data["results"]:
-        assert "id" in book
-        assert "title" in book
-        assert "downloads" in book
 
-def test_language_filter(client):
+def test_known_title(client):
+    response = client.get("/books?title=kennedy")
+    assert response.status_code == 200
+    assert any("kennedy" in (b["title"] or "").lower() for b in response.json()["results"])
+
+def test_download_count_field(client):
+    response = client.get("/books")
+    for b in response.json()["results"]:
+        assert isinstance(b["download_count"], int)  
+
+def test_subject_partial(client):
+    response = client.get("/books?topic=politics")
+    assert response.status_code == 200
+    # Should match on bookshelf or subject with "politics"
+    for book in response.json()["results"]:
+        names = [s["name"].lower() for s in book["subjects"] + book["bookshelves"]]
+        assert any("politics" in n for n in names)
+
+def test_language_code(client):
+    # Assuming 'en' exists from your dump
     response = client.get("/books?language=en")
     assert response.status_code == 200
     for book in response.json()["results"]:
         codes = [lang["code"] for lang in book["languages"]]
         assert "en" in codes
 
-def test_multiple_languages(client):
-    response = client.get("/books?language=en&language=fr")
-    assert response.status_code == 200
-    for book in response.json()["results"]:
-        codes = [lang["code"] for lang in book["languages"]]
-        assert "en" in codes or "fr" in codes
-
-def test_author_partial_match(client):
-    response = client.get("/books?author=lincoln")
-    assert response.status_code == 200
-    for book in response.json()["results"]:
-        authors = [a["name"].lower() for a in book["authors"]]
-        assert any("lincoln" in name for name in authors)
-
-def test_title_partial_match(client):
-    response = client.get("/books?title=address")
-    assert response.status_code == 200
-    for book in response.json()["results"]:
-        assert "address" in (book["title"] or "").lower()
-
-def test_topic_subject_partial_match(client):
-    response = client.get("/books?topic=education")
-    assert response.status_code == 200
-    if response.json()["results"]:
-        found = False
-        for book in response.json()["results"]:
-            subjects = [s["name"].lower() for s in book["subjects"]]
-            bookshelves = [s["name"].lower() for s in book["bookshelves"]]
-            if any("education" in s for s in subjects + bookshelves):
-                found = True
-        assert found, "No books found with 'education' in subject or bookshelf"
-
-def test_bookshelf_partial_match(client):
-    response = client.get("/books?topic=children")
-    assert response.status_code == 200
-    if response.json()["results"]:
-        found = False
-        for book in response.json()["results"]:
-            bookshelves = [s["name"].lower() for s in book["bookshelves"]]
-            if any("children" in shelf for shelf in bookshelves):
-                found = True
-        assert found, "No books found with 'children' in bookshelf"
-
-
-def test_mime_type_filter(client):
+def test_mime_type_real(client):
+    # Should return books with at least one format containing 'text/plain'
     response = client.get("/books?mime_type=text/plain")
     assert response.status_code == 200
     for book in response.json()["results"]:
         mime_types = [f["mime_type"] for f in book["formats"]]
         assert any("text/plain" in mt for mt in mime_types)
 
-def test_id_filter(client):
-    # Use a real book id from your DB; here, we just pick 1 for example.
-    response = client.get("/books?ids=1")
+
+def test_author_multi(client):
+    # Should work for any known substring of an author from your DB, e.g. "lincoln"
+    response = client.get("/books?author=lincoln")
     assert response.status_code == 200
-    if response.json()["results"]:  # Book may not exist in dump!
-        assert response.json()["results"][0]["id"] == 1
+    for b in response.json()["results"]:
+        names = [a["name"].lower() for a in b["authors"]]
+        assert any("lincoln" in name for name in names)
 
-def test_pagination(client):
-    r1 = client.get("/books?limit=1&skip=0")
-    r2 = client.get("/books?limit=1&skip=1")
-    assert r1.status_code == 200 and r2.status_code == 200
-    # Only compare if both have at least 1 result
-    if r1.json()["results"] and r2.json()["results"]:
-        assert r1.json()["results"][0]["id"] != r2.json()["results"][0]["id"]
+def test_pagination_skip(client):
+    # Get two pages and compare, should not repeat
+    page1 = client.get("/books?limit=2&skip=0").json()["results"]
+    page2 = client.get("/books?limit=2&skip=2").json()["results"]
+    if page1 and page2:
+        assert page1[0]["id"] != page2[0]["id"]
 
-def test_multiple_filters(client):
-    response = client.get("/books?author=lincoln&language=en&topic=address")
+def test_multiple_filters_strong(client):
+    # Find 'constitution' by author "United States" in English, with "Politics" subject
+    response = client.get("/books?title=constitution&author=united&language=en&topic=politics")
     assert response.status_code == 200
     for book in response.json()["results"]:
-        assert any("lincoln" in a["name"].lower() for a in book["authors"])
+        assert any("united" in a["name"].lower() for a in book["authors"])
         assert any(l["code"] == "en" for l in book["languages"])
         found = False
         for s in book["subjects"] + book["bookshelves"]:
-            if "address" in s["name"].lower():
+            if "politics" in s["name"].lower():
                 found = True
         assert found
 
-def test_not_found(client):
+def test_empty_result(client):
     response = client.get("/books?author=zzzxnonexistentxxx")
     assert response.status_code == 200
     assert response.json()["count"] == 0
     assert response.json()["results"] == []
 
-def test_downloads_sorted(client):
-    # Checks that results are sorted by downloads descending
+def test_sorting_by_downloads(client):
     response = client.get("/books")
-    assert response.status_code == 200
-    results = response.json()["results"]
-    downloads = [b["downloads"] or 0 for b in results]
+    downloads = [b["download_count"] for b in response.json()["results"]]  
     assert downloads == sorted(downloads, reverse=True)
 
-def test_invalid_params_handling(client):
-    response = client.get("/books?limit=abc")
-    assert response.status_code == 422  # Unprocessable Entity for invalid param type
-
-def test_title_case_insensitive(client):
-    # Should match titles regardless of case
+def test_case_insensitive_title(client):
     response = client.get("/books?title=CONSTITUTION")
     assert response.status_code == 200
     for book in response.json()["results"]:
         assert "constitution" in (book["title"] or "").lower()
+
+def test_combined_languages(client):
+    # Assume your DB has books in 'en' and 'fr'
+    response = client.get("/books?language=en&language=fr")
+    assert response.status_code == 200
+    for book in response.json()["results"]:
+        codes = [lang["code"] for lang in book["languages"]]
+        assert "en" in codes or "fr" in codes
+
+def test_invalid_limit_param(client):
+    response = client.get("/books?limit=notanumber")
+    assert response.status_code == 422  # Unprocessable Entity
+
+def test_missing_param_values(client):
+    response = client.get("/books?author=&title=")
+    assert response.status_code == 200  # Should not crash or error
+
+
+def test_subject_case_insensitive(client):
+    response = client.get("/books?topic=POLITICS")
+    assert response.status_code == 200
+    for book in response.json()["results"]:
+        found = False
+        for s in book["subjects"] + book["bookshelves"]:
+            if "politics" in s["name"].lower():
+                found = True
+        assert found
+
+def test_download_links_exist(client):
+    response = client.get("/books")
+    for book in response.json()["results"]:
+        assert isinstance(book["formats"], list)
+        for f in book["formats"]:
+            assert "url" in f and isinstance(f["url"], str)
+

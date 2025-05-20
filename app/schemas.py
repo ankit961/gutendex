@@ -36,7 +36,7 @@ class FormatOut(BaseModel):
 class BookOut(BaseModel):
     id: int
     title: Optional[str] = None
-    download_count: int
+    download_count: Optional[int]
     authors: List[AuthorOut]
     subjects: List[SubjectOut]
     bookshelves: List[BookshelfOut]

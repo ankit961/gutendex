@@ -1,16 +1,14 @@
 from fastapi import FastAPI, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from app.schemas import BookOut, BookListResponse
 
 from app.database import get_db
 from app import schemas, crud
-from fastapi import FastAPI, Body
+from fastapi import Body
 from pydantic import BaseModel
-from app.llm import query_to_filter
+from app.llm import query_to_filter, summarize_results
 from app.crud import get_books
-
-
-
 
 app = FastAPI(
     title="Gutendex API",
@@ -51,7 +49,9 @@ def list_books(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    return {"count": total, "results": books}
+    # Always serialize using BookOut to ensure correct fields and types
+    books_out = [BookOut.model_validate(b) for b in books]
+    return {"count": total, "results": books_out}
 
 class ChatRequest(BaseModel):
     query: str
@@ -62,11 +62,21 @@ class ChatBooksResponse(BaseModel):
     results: list
     summary: str
 
-@app.post("/chat", response_model=ChatBooksResponse, tags=["LLM"])
+@app.post("/chat", response_model=ChatBooksResponse, tags=["Chat"])
 def chat(request: ChatRequest, db=Depends(get_db)):
     filters = query_to_filter(request.query)
     allowed = {"author", "title", "language", "topic", "mime_type", "ids"}
     filters = {k: v for k, v in filters.items() if k in allowed}
-    count, books = get_books(db=db, **filters)
+    for k, v in filters.items():
+        if not isinstance(v, list):
+            filters[k] = [v]
+    count, books = get_books(db=db, filters=filters)
+    books_out = [BookOut.model_validate(b) for b in books]
     summary = summarize_results(request.query, filters, books)
-    return ChatBooksResponse(filters=filters, count=count, results=books, summary=summary)
+    if not summary:
+        summary = f"Found {count} books matching your query."
+    return ChatBooksResponse(filters=filters, count=count, results=books_out, summary=summary)
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}

@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from app.models import Book, Author, Subject, Bookshelf, Format, Language
 
@@ -15,6 +15,7 @@ def get_books(
     """
     query = db.query(Book)
 
+    # Apply filters
     if 'ids' in filters:
         query = query.filter(Book.id.in_(filters['ids']))
 
@@ -41,12 +42,24 @@ def get_books(
         for t in filters['title']:
             query = query.filter(Book.title.ilike(f"%{t}%"))
 
-    total = query.with_entities(func.count()).scalar()
-    results = (
-        query
-        .order_by(Book.download_count.desc())
+    # --- Count unique books ---
+    total = query.with_entities(Book.id).distinct().count()
+
+    # --- Get paginated unique IDs in order ---
+    subq = (
+        query.with_entities(Book.id, Book.download_count)
+        .order_by(Book.download_count.desc().nullslast())
+        .distinct()
         .offset(skip)
         .limit(limit)
+        .subquery()
+    )
+    # Now fetch Book objects in the same order as subq
+    books = (
+        db.query(Book)
+        .join(subq, Book.id == subq.c.id)
+        .order_by(subq.c.download_count.desc().nullslast())
         .all()
     )
-    return total, results
+
+    return total, books

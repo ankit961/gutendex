@@ -9,7 +9,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Confirm DB URL
-logger.info(f"🌐 Connecting to DB: {settings.DATABASE_URL}")
+logger.info(f"Connecting to DB")
 
 # Create SQLAlchemy engine
 engine = create_engine(settings.DATABASE_URL, echo=False)
@@ -23,7 +23,6 @@ try:
 
         inspector = inspect(engine)
         table_names = inspector.get_table_names()
-        logger.info(f"📋 Tables found in DB: {table_names}")
 
         if not table_names:
             logger.warning("⚠️ No tables found! Did you run migrations or load a dump?")

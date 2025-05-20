@@ -7,18 +7,11 @@ from app.database import Base, get_db
 from app.main import app
 from app.config import settings
 
-# Use a separate test database if needed
+# Use your normal database URL
 TEST_DATABASE_URL = settings.DATABASE_URL
 
 engine = create_engine(TEST_DATABASE_URL)
 TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-
-@pytest.fixture(scope="session", autouse=True)
-def create_test_db():
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
-    yield
-    Base.metadata.drop_all(bind=engine)
 
 @pytest.fixture
 def db_session():

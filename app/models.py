@@ -66,7 +66,7 @@ class Book(Base):
     __tablename__ = 'books_book'
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(1024), nullable=False)
-    download_count = Column(Integer, default=0)
+    download_count = Column(Integer, nullable=True)
 
     authors = relationship('Author', secondary=book_authors, back_populates='books')
     subjects = relationship('Subject', secondary=book_subjects, back_populates='books')
