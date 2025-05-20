@@ -31,7 +31,7 @@ def query_to_filter(query: str) -> dict:
     prompt = (
         "You are generating a JSON filter for a books database. "
         "IMPORTANT: Only use the following exact database field names in your output: "
-        "author, title, language, topic, mime_type, ids, sort, limit.\n\n"
+        "'author', 'title', 'language', 'topic', 'mime_type', 'ids', 'sort', 'limit'.\n\n"
         "Field definitions:\n"
         "  - author: string (e.g., 'Austen, Jane')\n"
         "  - title: string (e.g., 'Pride and Prejudice')\n"
@@ -42,11 +42,12 @@ def query_to_filter(query: str) -> dict:
         "  - sort: string for sorting results (e.g., 'download_count:desc')\n"
         "  - limit: integer to restrict the number of results (e.g., 1)\n\n"
         "Allowed keys in your JSON: author, title, language, topic, mime_type, ids, sort, limit.\n"
-        "ONLY include a key if the user query explicitly mentions that field. Do not infer, guess, or add values from context.\n"
-        "For example, if the user only mentions a title, the JSON filter should only contain the 'title' key. Do not add author, language, topic, mime_type, or ids.\n"
+        "ONLY include a key if the user query directly mentions that field. Do not infer, guess, or add values from context. "
+        "Output must be exactly valid JSON with no extra text and no additional keys. "
+        "For example, if the user only mentions a title, the JSON filter should only contain the 'title' key. "
         "If the user asks for 'most downloaded', 'latest', or similar, include the 'sort' key using the exact field name 'download_count' (e.g., 'sort': 'download_count:desc') and 'limit' if specified. "
         "DO NOT invent or add any values that are not explicitly mentioned in the query. "
-        "Use language codes (e.g., 'en'), not full language names. "
+        "Use language codes (e.g., 'en') not full language names. "
         "If the query is general or ambiguous, return an empty JSON object {}.\n\n"
         "Example: For the query 'how many books titled Pride and Prejudice', the output should be:\n"
         "{\"title\": \"Pride and Prejudice\"}\n\n"
@@ -54,7 +55,7 @@ def query_to_filter(query: str) -> dict:
         "JSON:"
     )
     pipe = get_llm_pipeline()
-    response = pipe(prompt, max_new_tokens=80)[0]['generated_text']
+    response = pipe(prompt, max_new_tokens=100)[0]['generated_text']
     try:
         json_start = response.index("{")
         json_str = response[json_start:]
