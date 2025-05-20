@@ -6,6 +6,20 @@ pipeline {
     triggers { githubPush() }
 
     stages {
+        stage('Copy .env from Azure VM') {
+            steps {
+                withCredentials([sshUserPrivateKey(
+                    credentialsId: 'gutendex-ssh-key',
+                    keyFileVariable: 'SSH_KEY',
+                    usernameVariable: 'SSH_USER'
+                )]) {
+                    sh '''
+                        scp -i $SSH_KEY -o StrictHostKeyChecking=no $SSH_USER@<YOUR_AZURE_VM_IP>:/home/azureuser/gutendex/.env .
+                    '''
+                }
+            }
+        }
+
         stage('Build Docker Image') {
             steps { script { docker.build('gutendex-app') } }
         }
