@@ -41,7 +41,7 @@ It’s fully containerized, with a robust CI/CD pipeline powered by Jenkins and 
 ```mermaid
 flowchart TD
     User([User / Client])
-    API[Gutendex API (FastAPI in Docker)]
+    API["Gutendex API (FastAPI in Docker)"]
     DB[(PostgreSQL Database)]
     Env[.env Config File]
     Jenkins[Jenkins CI/CD Server]
@@ -60,6 +60,8 @@ flowchart TD
     class AzureVM,DB infra
     classDef cicd fill:#fff0f6,stroke:#b8005d
     class Jenkins cicd
+
+
 ```
 
 ### System Flow
