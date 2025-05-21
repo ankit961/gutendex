@@ -173,17 +173,17 @@ def summarize_results(query: str, books: List[Any]) -> str:
     book_titles = ', '.join([getattr(b, 'title', None) for b in books if getattr(b, 'title', None)])
     author_names = ', '.join({getattr(a, 'name', None) for b in books for a in getattr(b, 'authors', []) if getattr(a, 'name', None)})
     prompt = (
-        f"There {'is' if len(books)==1 else 'are'} {len(books)} book{'s' if len(books)!=1 else ''}"
-        + (f" by {author_names}" if author_names else "")
-        + (f': "{book_titles}"' if book_titles else "")
-        + ". Write a 1-2 sentence summary of this result."
+        f"Summarize the following search result in 1-2 sentences. "
+        f"Query: '{query}'. "
+        f"Books found: {len(books)}. "
+        f"Authors: {author_names}. "
+        f"Titles: {book_titles}."
     )
     try:
         cands = generate_text(prompt, max_new_tokens=80, temperature=0.8)
         logger.info(f"LLM summary candidates: {cands}")
         valid = []
         for c in cands:
-            # Remove the prompt from the start if present
             if c.startswith(prompt):
                 c = c[len(prompt):].lstrip("\n: ")
             if len(c.strip()) > 20:
@@ -192,6 +192,7 @@ def summarize_results(query: str, books: List[Any]) -> str:
             return max(valid, key=len)
     except Exception as e:
         logger.error(f"Summary failed: {e}")
+    # Fallback deterministic summary
     return f"Found {len(books)} books matching your query."
 
 

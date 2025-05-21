@@ -105,6 +105,9 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)) -> ChatBooksRespon
             else:
                 cleaned[k] = [v]
 
+    if "language" in filters:
+        cleaned["language"] = [filters["language"]] if isinstance(filters["language"], str) else filters["language"]
+
     # 3) handle limit and sort from filters
     limit = filters.get("limit", 25)
     try:
