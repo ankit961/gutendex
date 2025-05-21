@@ -93,7 +93,6 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)) -> ChatBooksRespon
     for k, v in filters.items():
         if k in allowed:
             if k == "ids":
-                # Ensure ids is always a list of ints
                 if isinstance(v, int):
                     cleaned[k] = [v]
                 elif isinstance(v, str) and v.isdigit():
@@ -105,8 +104,15 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)) -> ChatBooksRespon
             else:
                 cleaned[k] = [v]
 
-    if "language" in filters:
-        cleaned["language"] = [filters["language"]] if isinstance(filters["language"], str) else filters["language"]
+    # --- PATCH: Try to extract language from the user query if not present in filters ---
+    import re
+    if "language" not in cleaned:
+        # crude extraction: look for 'fr', 'en', etc. in the query
+        m = re.search(r"\b([a-z]{2})\b", request.query.lower())
+        if m:
+            lang = m.group(1)
+            if lang in {"fr", "en", "de", "es", "it"}:  # add more as needed
+                cleaned["language"] = [lang]
 
     # 3) handle limit and sort from filters
     limit = filters.get("limit", 25)
@@ -118,7 +124,6 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)) -> ChatBooksRespon
 
     # 4) fetch books
     total, books = crud.get_books(db, cleaned, skip=0, limit=limit)
-    # Optionally, handle sort if your get_books supports it
 
     # 5) summarize
     summary = summarize_results(request.query, books)
