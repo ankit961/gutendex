@@ -1,42 +1,45 @@
 
-
 # Gutendex API
 
-##  Overview
+## Overview
 
-Gutendex is a modern, scalable API service that exposes a RESTful interface for querying books, authors, and subjects—mirroring Project Gutenberg’s public domain eBooks metadata—built on [FastAPI](https://fastapi.tiangolo.com/), backed by a PostgreSQL database.
-It’s fully containerized, with a robust CI/CD pipeline powered by Jenkins and Docker, deployed on Azure VM.
-**No Docker Compose is used in production for explicit control and separation of concerns.**
+**Gutendex** is a modern, scalable API for querying the Project Gutenberg open books dataset, exposing books, authors, languages, and topics with powerful full-text and filter-based search—**plus natural-language querying via a local LLM**. Built with FastAPI, PostgreSQL, and Docker, it’s designed for high performance and full automation via Jenkins CI/CD on Azure.
 
----
-
-##  Features
-
-* **REST API** for querying books, authors, download counts, and more.
-* **FastAPI** backend for high-performance, async requests.
-* **PostgreSQL** as the database.
-* **CI/CD**: Automated testing, building, and deployment with Jenkins.
-* **Dockerized**: Consistent environments across local/dev/prod.
-* **Configurable**: All secrets and configs via `.env` file.
+**Note:** No Docker Compose is used in production for explicit control and robust separation of concerns.
 
 ---
 
-##  Technology Stack
+## Features
 
-* **FastAPI** (Python 3.9)
-* **SQLAlchemy** (ORM)
-* **PostgreSQL** (DB)
-* **Docker** (Containerization)
-* **Jenkins** (CI/CD)
-* **Azure VM** (Deployment)
-* **Docker Hub** (Image Registry)
-* **pytest** (Testing)
+* **REST API** for querying books, authors, topics, and download counts.
+* **/chat endpoint** for LLM-powered natural language search and summarization.
+* **FastAPI** async backend for low-latency requests.
+* **PostgreSQL** for persistent storage.
+* **Dockerized** for reliable, repeatable deployments.
+* **Automated CI/CD** with Jenkins and Docker Hub.
+* **Highly configurable** via `.env` file.
+* **Comprehensive OpenAPI docs** at `/docs` and `/redoc`.
+
+---
+
+## Technology Stack
+
+* Python 3.9
+* FastAPI
+* SQLAlchemy (ORM)
+* PostgreSQL (DB)
+* Docker
+* Jenkins (CI/CD)
+* Azure VM (Production deployment)
+* Docker Hub (Image registry)
+* pytest (Testing)
+* HuggingFace Transformers (LLM)
 
 ---
 
 ## Architecture & Deployment Flow
 
-### High-Level Architecture
+### System Architecture
 
 ```mermaid
 flowchart TD
@@ -60,55 +63,35 @@ flowchart TD
     class AzureVM,DB infra
     classDef cicd fill:#fff0f6,stroke:#b8005d
     class Jenkins cicd
-
-
 ```
 
 ### System Flow
 
-1. **User** sends an HTTP request to the `/books` endpoint.
-2. **FastAPI app** (inside Docker) receives the request and reads configuration from `.env`.
-3. The app queries **PostgreSQL** for matching books/authors.
-4. **Jenkins** automates building, testing, and deployment:
-
-   * Pulls latest code from GitHub.
-   * Copies latest `.env` from Azure VM (for secure config).
-   * Builds Docker image and runs tests.
-   * Pushes image to Docker Hub.
-   * SSHes to Azure VM, pulls latest image, restarts the container (using real `.env`).
-
-### Why Not Docker Compose?
-
-* **Production practice**: Compose is excellent for local dev or multi-service prototyping, but for production, explicit Docker commands give more control and transparency.
-* **Separation of Concerns**: Database and API managed independently; PostgreSQL can be managed by systemd, cloud, or external PaaS.
-* **CI/CD pipeline**: Jenkins manages each deployment step explicitly, ensuring repeatable, auditable releases.
+1. **User** sends HTTP request (`/books`, `/chat`, etc.).
+2. **FastAPI app** (inside Docker) reads `.env`, queries PostgreSQL, or runs LLM.
+3. **Jenkins** pulls latest code, builds/tests image, pushes to Docker Hub, SSHes to Azure VM, pulls latest image, and restarts the container.
+4. **No Docker Compose**: DB and API run independently; explicit `docker run` commands control the stack.
 
 ---
 
-## 🧑‍💻 API Endpoints
+## Why Not Docker Compose?
 
-| Endpoint      | Description                   |
-| ------------- | ----------------------------- |
-| `/books`      | List/query books with filters |
-
-
-All endpoints return JSON.
-See `/docs` (Swagger UI) or `/redoc` for live API docs when running.
+* **Production control:** Compose is for local/dev or simple multi-service prototyping. In prod, explicit commands are more secure and transparent.
+* **Separation of concerns:** DB is managed independently (via systemd, managed PaaS, or cloud tools).
+* **CI/CD integration:** Jenkins orchestrates deployments step-by-step.
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
-All sensitive values (DB connection, keys) are stored in a `.env` file (never committed to git):
+All sensitive info is set in a `.env` file (never committed to git):
 
 ```ini
 DATABASE_URL=postgresql://<user>:<password>@<server>:5432/<db>
-LLM_MODEL_PATH=/path/to/model  # Example only if your API loads a model
-SECRET_KEY=your_secret
-DEBUG=True
+LLM_MODEL_PATH=/path/to/model          # For LLM features
 ```
 
-**Copy your .env from your VM to the Jenkins workspace before build, as in the CI/CD script.**
+**.env file is copied from Azure VM to Jenkins workspace before build.**
 
 ---
 
@@ -118,50 +101,50 @@ DEBUG=True
 
    * Python 3.9
    * Docker
-   * PostgreSQL running and accessible (can be remote)
+   * PostgreSQL (local or remote)
 
-2. **Clone and setup:**
+2. **Setup:**
 
-   ```sh
+   ```bash
    git clone https://github.com/ankit961/gutendex.git
    cd gutendex
-   cp .env.example .env  # or copy your real .env here
+   cp .env.example .env   # Use real values
    ```
 
 3. **Build Docker image:**
 
-   ```sh
+   ```bash
    docker build -t gutendex-app .
    ```
 
-4. **Run Docker container:**
+4. **Run the container:**
 
-   ```sh
+   ```bash
    docker run --rm --env-file .env -p 8000:8000 gutendex-app
    ```
 
-   Access the API at [http://localhost:8000/docs](http://localhost:8000/docs)
+   Open [http://localhost:8000/docs](http://localhost:8000/docs)
 
 ---
 
-## 🚦 CI/CD Pipeline (Jenkins)
+## CI/CD Pipeline (Jenkins)
 
-**Pipeline stages:**
+**Stages:**
 
-1. **Checkout code** from GitHub.
-2. **Copy .env** from Azure VM.
-3. **Build Docker image** (`docker build`).
-4. **Run tests** inside container (`pytest`).
-5. **Push to Docker Hub.**
-6. **SSH to Azure VM**, pull latest image, stop old container, start new one with `.env`.
+1. Checkout latest code from GitHub.
+2. Copy `.env` from Azure VM.
+3. Build Docker image (`docker build`).
+4. Run tests inside container (`pytest`).
+5. Push to Docker Hub.
+6. SSH to Azure VM, pull image, stop old container, run new one.
 
-**Sample Jenkinsfile (snippet):**
+**Example Jenkinsfile snippet:**
 
 ```groovy
 stage('Copy .env from Azure VM') {
     steps {
         sshagent(['azureuser-ssh-key']) {
-            sh "scp -o StrictHostKeyChecking=no azureuser@<AZURE_VM_IP>:/home/azureuser/gutendex/.env .env"
+            sh "scp azureuser@<AZURE_VM_IP>:/home/azureuser/gutendex/.env .env"
         }
     }
 }
@@ -176,7 +159,7 @@ stage('Deploy to Azure VM') {
     steps {
         sshagent(['azureuser-ssh-key']) {
             sh '''
-                ssh -o StrictHostKeyChecking=no azureuser@<AZURE_VM_IP> '
+                ssh azureuser@<AZURE_VM_IP> '
                     docker pull ankitchauhan961/gutendex-app:latest &&
                     docker stop gutendex-app || true &&
                     docker rm gutendex-app || true &&
@@ -191,92 +174,205 @@ stage('Deploy to Azure VM') {
 
 ---
 
-## 🩺 Troubleshooting
+## LLM (Large Language Model) Features
 
-**Common Issues & Fixes:**
+### What It Does
 
-### Database Connection Issues
+* Converts natural language queries (e.g., "top 5 French classics") to smart database filters.
+* Returns a summary of found books in readable English.
+* Powers the `/chat` endpoint, using your **local HuggingFace model** (see `LLM_MODEL_PATH`).
 
-* **Connection refused**
+**Implementation:**
 
-  * Is Postgres running? `sudo systemctl status postgresql`
-  * Can you connect via `psql`?
+* On `/chat` POST, the backend uses the LLM to parse and generate JSON filters.
+* Model is loaded from a locally provided path, using HuggingFace `pipeline`.
+* Summaries are also LLM-generated for user-friendly responses.
 
-    ```sh
-    psql "postgresql://user:pass@host:5432/db"
-    ```
-  * Check `listen_addresses` in `postgresql.conf` (should be `'*'` for external connections).
-  * Add Docker network IPs to `pg_hba.conf`, e.g.:
+**Example LLM filter extraction code:**
 
-    ```
-    host all all 172.17.0.0/16 md5
-    ```
-
-    Then reload Postgres:
-
-    ```sh
-    sudo systemctl reload postgresql
-    ```
-
-* **No pg\_hba.conf entry**
-
-  * Ensure the Docker bridge subnet (e.g., `172.17.0.0/16`) is allowed in `pg_hba.conf`.
-
-* **Host resolution errors**
-
-  * Use **actual VM IP** (e.g., `10.2.0.5` or `localhost` if API & DB run on same machine), not `host.docker.internal` unless using Docker for Mac/Windows.
-
-### Port Already in Use
-
-* Another process is running on 8000/80.
-* Free the port:
-
-  ```sh
-  sudo lsof -i :8000
-  sudo kill <pid>
-  ```
-
-### Docker Daemon Permission
-
-* If you see `permission denied while trying to connect to the Docker daemon socket`:
-
-  * Add your user to the docker group:
-
-    ```sh
-    sudo usermod -aG docker azureuser
-    ```
-  * Reboot or re-login.
-
-### Container Debugging
-
-* Check logs:
-
-  ```sh
-  docker logs <container-id>
-  ```
-* Get shell:
-
-  ```sh
-  docker exec -it <container-id> /bin/bash
-  ```
+```python
+{
+  "filters": {
+    "sort": "download_count:desc",
+    "limit": 6,
+    "language": ["fr"]
+  },
+  ...
+}
+```
 
 ---
 
-## 🔒 Security Best Practices
+## API Endpoints
 
-* **Never commit your `.env` file** to version control.
-* Always use strong DB passwords.
-* Use firewalls to restrict DB access to the VM only.
+### 1. `GET /books` – **List Books**
+
+Retrieve a paginated list of books, filterable by any combination:
+
+| Query Param | Type                  | Description                           |
+| ----------- | --------------------- | ------------------------------------- |
+| ids         | array\<integer>       | Gutenberg book IDs                    |
+| language    | array\<string>        | Language codes (e.g., `en`, `fr`)     |
+| mime\_type  | string                | Format/mime-type (e.g., `text/plain`) |
+| topic       | array\<string>        | Search in subjects or bookshelves     |
+| author      | array\<string>        | Author name (partial match)           |
+| title       | array\<string>        | Book title (partial match)            |
+| skip        | integer (default: 0)  | Records to skip                       |
+| limit       | integer (default: 25) | Max records to return (`1-100`)       |
+
+**Example:**
+
+```http
+GET /books?language=fr&limit=2
+```
+
+**Sample Response:**
+
+```json
+{
+  "count": 6,
+  "results": [
+    {
+      "id": 17489,
+      "title": "Les misérables Tome I: Fantine",
+      "download_count": 718,
+      "authors": [{ "id": 82, "name": "Hugo, Victor", "birth_year": 1802, "death_year": 1885 }],
+      "subjects": [{ "id": 61, "name": "Historical fiction" }],
+      "bookshelves": [{ "id": 67, "name": "FR Littérature" }],
+      "languages": [{ "id": 5, "code": "fr" }],
+      "formats": [{ "mime_type": "application/epub+zip", "url": "http://www.gutenberg.org/ebooks/17489.epub.images" }]
+    }
+  ]
+}
+```
+
+### 2. `POST /chat` – **LLM-powered Search and Summary**
+
+Handles user queries, runs the LLM to create DB filters, fetches books, and summarizes results.
+
+**Request Body:**
+
+```json
+{
+  "query": "top 6 fr language book"
+}
+```
+
+**Response:**
+
+```json
+{
+  "filters": {
+    "sort": "download_count:desc",
+    "limit": 6,
+    "language": ["fr"]
+  },
+  "count": 6,
+  "results": [
+    {
+      "id": 17489,
+      "title": "Les misérables Tome I: Fantine",
+      "download_count": 718,
+      ...
+    }
+  ],
+  "summary": "Categories: Literature and Classics | France | English language. Description: This is a comprehensive guide to reading French books online..."
+}
+```
+
+### 3. `GET /health` – **Health Check**
+
+Returns `"ok"` if the API is running.
+
+---
+
+## Data Schemas
+
+### BookOut
+
+```json
+{
+  "id": 0,
+  "title": "string",
+  "download_count": 0,
+  "authors": [{ "id": 0, "name": "string", "birth_year": 0, "death_year": 0 }],
+  "subjects": [{ "id": 0, "name": "string" }],
+  "bookshelves": [{ "id": 0, "name": "string" }],
+  "languages": [{ "id": 0, "code": "string" }],
+  "formats": [{ "mime_type": "string", "url": "string" }]
+}
+```
+
+### ChatBooksResponse
+
+```json
+{
+  "filters": { "sort": "download_count:desc", "limit": 6 },
+  "count": 6,
+  "results": [ <BookOut>, ... ],
+  "summary": "string"
+}
+```
+
+---
+
+## Troubleshooting
+
+**Database Connection**
+
+* **Connection refused?**
+
+  * Check Postgres status: `sudo systemctl status postgresql`
+  * Can you connect with `psql`?
+  * `listen_addresses` in `postgresql.conf` should be `'*'`
+  * Add Docker bridge IPs to `pg_hba.conf`, e.g.: `host all all x.x.x.x/16 md5`
+  * Reload: `sudo systemctl reload postgresql`
+
+* **No pg\_hba.conf entry?**
+
+  * Add Docker subnet in `pg_hba.conf`.
+
+* **Host resolution errors?**
+
+  * Use the **actual VM IP** (e.g., `10.x.x.x`) or `localhost` (if API & DB run on same VM).
+
+**Other issues**
+
+* **Port in use:**
+  Free it: `sudo lsof -i :8000; sudo kill <pid>`
+* **Docker daemon permission:**
+  `sudo usermod -aG docker <user>` and re-login.
+* **Debug logs:**
+  `docker logs <container-id>`
+* **Shell into container:**
+  `docker exec -it <container-id> /bin/bash`
+
+---
+
+## Security Best Practices
+
+* Never commit your `.env` file.
+* Use strong DB/user passwords.
+* Restrict DB access to VM only.
 * Rotate SSH keys and credentials regularly.
 
 ---
 
-##  FAQ
+## FAQ
 
-**Q: Can I run everything with Docker Compose?**
-*A: You could for local development, but for production, we keep DB and API management separate for security and stability. Explicit `docker run` commands are used in deployment scripts for full control and better troubleshooting.*
+**Q: Can I use Docker Compose?**
+A: You can for local dev, but in production, DB and API are managed separately for reliability and security.
 
-**Q: How do I add new environment variables?**
-*A: Add them to the `.env` file, update your code to read them via Pydantic/`os.environ`, and re-deploy.*
+**Q: How do I add environment variables?**
+A: Add to `.env`, update code if needed, and redeploy.
+
+**Q: Where are the docs?**
+A: [http://135.235.193.30/docs](http://135.235.193.30/docs) or `/redoc`.
 
 ---
+
+## Try Out the API
+
+* **Swagger UI:** [http://135.235.193.30/docs](http://135.235.193.30/docs)
+* **ReDoc:** [http://135.235.193.30/redoc](http://135.235.193.30/redoc)
+
