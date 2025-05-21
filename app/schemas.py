@@ -1,5 +1,5 @@
+from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
-from typing import List, Optional
 
 class AuthorOut(BaseModel):
     id: int
@@ -49,3 +49,12 @@ class BookOut(BaseModel):
 class BookListResponse(BaseModel):
     count: int
     results: List[BookOut]
+
+class ChatBooksResponse(BaseModel):
+    filters: Dict[str, Any]
+    count: int
+    results: List[BookOut]
+    summary: Optional[str]
+
+class ChatRequest(BaseModel):
+    query: str

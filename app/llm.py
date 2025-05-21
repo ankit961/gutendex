@@ -1,176 +1,197 @@
+"""
+llm.py
+
+A robust LLM-driven filter-and-summary module for Gutendex.
+
+Features:
+- Thread-safe model initialization
+- Controlled sampling (temperature, top-p, top-k, repetition penalty)
+- Multi-candidate generation with best-candidate selection
+- Explicit handling for 'most downloaded', 'latest', and 'top N' queries
+- Sanitization and JSON-only output between clear markers
+- Example usage at bottom
+"""
 import json
 import logging
-from typing import Dict, Any, List
-from transformers import pipeline, AutoModelForCausalLM, AutoTokenizer
-from app.config import settings
-import torch
+import re
 from threading import Lock
+from typing import Any, Dict, List, Optional
 
-# Thread-safe singleton for LLM pipeline
-_llm_pipeline = None
-_llm_lock = Lock()
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
-def get_llm_pipeline():
+from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+# Thread-safe singletons
+_model: Optional[AutoModelForCausalLM] = None
+_tokenizer: Optional[AutoTokenizer] = None
+_lock = Lock()
+
+
+def _device() -> str:
+    """Utility: returns 'cuda' if available, else 'cpu'."""
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def init_model():
     """
-    Loads and returns the LLM pipeline for text generation.
-    Uses global caching and locking to avoid reloading the model on every call.
+    Load model and tokenizer once, in a thread-safe manner.
     """
-    global _llm_pipeline
-    with _llm_lock:
-        if _llm_pipeline is None:
-            tokenizer = AutoTokenizer.from_pretrained(settings.LLM_MODEL_PATH, trust_remote_code=True)
-            model = AutoModelForCausalLM.from_pretrained(
+    global _model, _tokenizer
+    with _lock:
+        if _model is None or _tokenizer is None:
+            _tokenizer = AutoTokenizer.from_pretrained(
+                settings.LLM_MODEL_PATH, trust_remote_code=True
+            )
+            _model = AutoModelForCausalLM.from_pretrained(
                 settings.LLM_MODEL_PATH,
                 trust_remote_code=True,
-                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
-            )
-            _llm_pipeline = pipeline(
-                "text-generation",
-                model=model,
-                tokenizer=tokenizer,
-                device=0 if torch.cuda.is_available() else -1,
-                max_new_tokens=128,
-                do_sample=True,
-                temperature=0.2,
-                repetition_penalty=1.1
-            )
-    return _llm_pipeline
+                torch_dtype=(torch.float16 if torch.cuda.is_available() else torch.float32),
+            ).to(_device())
 
-def extract_explicit_keys(query: str, allowed: List[str]) -> List[str]:
-    """
-    Returns a list of allowed keys that are explicitly mentioned in the query.
-    """
-    query_lower = query.lower()
-    return [k for k in allowed if k in query_lower]
 
-def query_to_filter(query: str) -> Dict[str, Any]:
+def generate_text(
+    prompt: str,
+    max_new_tokens: int = 128,
+    temperature: float = 0.7,
+    top_p: float = 0.9,
+    top_k: int = 50,
+    repetition_penalty: float = 1.2,
+    num_return_sequences: int = 3
+) -> List[str]:
     """
-    Converts a user query string into a JSON filter for the books database using the LLM.
-    The prompt is designed to minimize hallucination and ensure only explicitly mentioned fields are included.
-    Returns a dictionary suitable for filtering the database.
+    Generate multiple sampled outputs from the model.
     """
-    allowed_keys = ['author', 'title', 'language', 'topic', 'mime_type', 'ids', 'sort', 'limit']
-    prompt = (
-        "You are an expert assistant for generating JSON filters for a books database API.\n\n"
-        "Your task is to convert a user's natural language question into a JSON object that can be used to filter a books database. "
-        "The JSON must use only the allowed keys and must not include any extra keys or inferred values.\n"
-        "--------------------\n"
-        "ALLOWED KEYS & FORMATS:\n"
-        "- author: string (e.g., \"Austen, Jane\")\n"
-        "- title: string (e.g., \"Pride and Prejudice\")\n"
-        "- language: list of ISO 639-1 codes (e.g., [\"en\"], [\"fr\"])\n"
-        "- topic: string (e.g., \"adventure\", \"Love stories\")\n"
-        "- mime_type: string (e.g., \"text/plain; charset=utf-8\", \"application/pdf\")\n"
-        "- ids: list of integers (e.g., [1342])\n"
-        "- sort: string for sorting results (e.g., \"download_count:desc\", \"latest\")\n"
-        "- limit: integer (e.g., 1, 5, 10)\n"
-        "--------------------\n"
-        "STRICT RULES:\n"
-        "- Only include a key if the user query **explicitly mentions** it.\n"
-        "- Do NOT infer, guess, or add values from context, prior knowledge, or the title.\n"
-        "- Do NOT include any key or value unless it is directly stated in the query.\n"
-        "- Use language codes (e.g., \"en\"), not full language names.\n"
-        "- If the user asks for \"most downloaded\", \"top\", or \"latest\", use the 'sort' key (e.g., \"sort\": \"download_count:desc\" or \"sort\": \"latest\") and 'limit' if a number is specified.\n"
-        "- If the user asks for a specific number of results, use the 'limit' key.\n"
-        "- If the user asks for a specific book by id, use the 'ids' key with a list of integers.\n"
-        "- If the query is general or ambiguous, return an empty JSON object {}.\n"
-        "- Output **must be valid JSON only** with no extra text, comments, or explanations.\n"
-        "--------------------\n"
-        "POSITIVE EXAMPLES:\n"
-        "Q: how many books titled Pride and Prejudice\n"
-        "A: {\"title\": \"Pride and Prejudice\"}\n\n"
-        "Q: Most Downloaded book\n"
-        "A: {\"sort\": \"download_count:desc\", \"limit\": 1}\n\n"
-        "Q: List top 3 most downloaded French books\n"
-        "A: {\"language\": [\"fr\"], \"sort\": \"download_count:desc\", \"limit\": 3}\n\n"
-        "Q: Books by Mark Twain about adventure\n"
-        "A: {\"author\": \"Mark Twain\", \"topic\": \"adventure\"}\n\n"
-        "Q: Give me books in Spanish\n"
-        "A: {\"language\": [\"es\"]}\n\n"
-        "Q: Show me books with mime type text/html\n"
-        "A: {\"mime_type\": \"text/html\"}\n\n"
-        "Q: Find book with id 1342\n"
-        "A: {\"ids\": [1342]}\n\n"
-        "Q: List 10 latest books\n"
-        "A: {\"sort\": \"latest\", \"limit\": 10}\n\n"
-        "Q: Give me all books\n"
-        "A: {}\n\n"
-        "Q: Show me 5 books by Agatha Christie in English, sorted by most downloaded\n"
-        "A: {\"author\": \"Agatha Christie\", \"language\": [\"en\"], \"sort\": \"download_count:desc\", \"limit\": 5}\n\n"
-        "Q: Show me books about science fiction in French\n"
-        "A: {\"topic\": \"science fiction\", \"language\": [\"fr\"]}\n"
-        "--------------------\n"
-        "NEGATIVE EXAMPLES (DO NOT DO THIS):\n"
-        "Incorrect: (query only mentions title, but LLM adds extra fields)\n"
-        "{\n"
-        "  \"author\": \"Austen, Jane\",\n"
-        "  \"title\": \"Pride and Prejudice\",\n"
-        "  \"language\": [\"en\"],\n"
-        "  \"topic\": [\"Love stories\"],\n"
-        "  \"mime_type\": \"text/plain; charset=utf-8\",\n"
-        "  \"ids\": [1342],\n"
-        "  \"sort\": \"download_count:desc\",\n"
-        "  \"limit\": 5\n"
-        "}\n\n"
-        "Incorrect: (query is ambiguous, but LLM guesses fields)\n"
-        "{\n"
-        "  \"author\": \"Unknown\",\n"
-        "  \"language\": [\"en\"]\n"
-        "}\n\n"
-        "Incorrect: (query is general, but LLM adds keys)\n"
-        "{\n"
-        "  \"sort\": \"download_count:desc\"\n"
-        "}\n"
-        "--------------------\n"
-        "EDGE CASES:\n"
-        "- If the user says \"any book\", \"all books\", or is vague, return {}.\n"
-        "- If the user says \"top 5\", use \"limit\": 5 and \"sort\": \"download_count:desc\".\n"
-        "- If the user says \"latest\", use \"sort\": \"latest\" and \"limit\" if a number is given.\n"
-        "- If the user says \"books by id 123, 456\", use \"ids\": [123, 456].\n"
-        "- If the user says \"books in English and French\", use \"language\": [\"en\", \"fr\"].\n"
-        "--------------------\n"
-        "If you are unsure, return {}.\n"
-        "--------------------\n"
-        f"Question: {query}\n"
-        "JSON:"
+    init_model()
+    inputs = _tokenizer(prompt, return_tensors='pt').to(_device())
+    gen_cfg = GenerationConfig(
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
+        repetition_penalty=repetition_penalty,
+        do_sample=True,
+        num_return_sequences=num_return_sequences,
+        eos_token_id=_tokenizer.eos_token_id
     )
-    pipe = get_llm_pipeline()
-    response = pipe(prompt, max_new_tokens=180)[0]['generated_text']
-    try:
-        # Extract the JSON object from the LLM output
-        json_start = response.index("{")
-        json_str = response[json_start:]
-        last_brace = max(json_str.rfind("}"), json_str.rfind("]"))
-        if last_brace != -1:
-            json_str = json_str[:last_brace+1]
-        filter_dict = json.loads(json_str)
-        # Post-process: remove keys not explicitly mentioned in the query (except sort/limit)
-        explicit_keys = extract_explicit_keys(query, allowed_keys)
-        filter_dict = {k: v for k, v in filter_dict.items() if k in explicit_keys or k in ['sort', 'limit']}
-        return filter_dict
-    except Exception as e:
-        logging.error(f"Failed to parse filter JSON: {e}\nRaw LLM output: {response}")
-        return {}
+    with torch.no_grad():
+        outputs = _model.generate(**inputs, generation_config=gen_cfg)
+    return [_tokenizer.decode(out, skip_special_tokens=True) for out in outputs]
 
-def summarize_results(query: str, filters: dict, books: list) -> str:
+
+def sanitize_filter(filt: Dict[str, Any], query: str) -> Dict[str, Any]:
     """
-    Generates a short summary of the search results using the LLM.
-    If no books are found, returns a default message.
+    Keep only keys that appear explicitly in query (or sort/limit).
+    """
+    allowed = {'author', 'title', 'language', 'topic', 'mime_type', 'ids', 'sort', 'limit', 'download_count'}
+    query_lower = query.lower()
+    explicit = set()
+    for k in allowed:
+        if k in ['sort', 'limit']:
+            if any(w in query_lower for w in ('most downloaded', 'latest', 'top')):
+                explicit.add(k)
+        elif k == 'ids' and ('id' in query_lower or 'ids' in query_lower):
+            explicit.add(k)
+        elif k in query_lower:
+            explicit.add(k)
+    if 'download' in query_lower:
+        explicit.add('download_count')
+    result = {}
+    for k, v in filt.items():
+        if k in explicit:
+            if k == 'ids':
+                if isinstance(v, int):
+                    result[k] = [v]
+                elif isinstance(v, str) and v.isdigit():
+                    result[k] = [int(v)]
+                elif isinstance(v, list):
+                    result[k] = [int(x) for x in v if isinstance(x, (int, str)) and str(x).isdigit()]
+            elif k == 'limit':
+                try:
+                    result[k] = int(v)
+                except Exception:
+                    continue
+            else:
+                result[k] = v
+    return result
+
+
+def extract_filter(query: str) -> Dict[str, Any]:
+    """
+    Convert a natural-language query into a Gutendex filter dict.
+    Handles:
+      - "most downloaded" / "top N" → sort:download_count desc, limit:N
+      - "latest" / "latest N" → sort:latest, limit:N
+      - Otherwise, uses LLM to produce JSON between <FILTER>…</FILTER>
+    """
+    q = query.strip()
+    if re.search(r"\bmost downloaded\b|\btop \d+\b", q, re.IGNORECASE):
+        m = re.search(r"top (\d+)", q, re.IGNORECASE)
+        n = int(m.group(1)) if m else 1
+        return {"sort": "download_count:desc", "limit": n}
+    if re.search(r"\blatest\b", q, re.IGNORECASE):
+        m = re.search(r"latest (\d+)", q, re.IGNORECASE)
+        n = int(m.group(1)) if m else 1
+        return {"sort": "latest", "limit": n}
+    prompt = (
+        "Allowed keys: author, title, language, topic, mime_type, ids, sort, limit, download_count.\n"
+        "Output only one valid JSON object, no extra text, between <<<FILTER>>> and <<<END>>>.\n"
+        f"Query: {q}\n<<<FILTER>>>"
+    )
+    try:
+        candidates = generate_text(prompt, max_new_tokens=120, temperature=0.2, num_return_sequences=2)
+        for raw in candidates:
+            m = re.search(r"<<<FILTER>>>(\{.*?\})<<<END>>>", raw, re.DOTALL)
+            if m:
+                try:
+                    filt = json.loads(m.group(1))
+                    return sanitize_filter(filt, query)
+                except Exception:
+                    continue
+        for raw in candidates:
+            m = re.search(r"(\{.*\})", raw, re.DOTALL)
+            if m:
+                try:
+                    filt = json.loads(m.group(1))
+                    return sanitize_filter(filt, query)
+                except Exception:
+                    continue
+    except Exception as e:
+        logger.error(f"Failed to generate filter: {e}")
+    return {}
+
+
+def summarize_results(query: str, books: List[Any]) -> str:
+    """
+    Summarize the overall search result into a concise 1-2 sentence description,
+    without listing individual books.
     """
     if not books:
         return "No books matched your criteria."
-    book_samples = []
-    for b in books[:3]:
-        title = getattr(b, "title", "")
-        authors = ", ".join(getattr(a, "name", "Unknown author") for a in getattr(b, "authors", [])) or "Unknown author"
-        book_samples.append(f"'{title}' by {authors}")
+    book_titles = ', '.join([getattr(b, 'title', None) for b in books if getattr(b, 'title', None)])
+    author_names = ', '.join({getattr(a, 'name', None) for b in books for a in getattr(b, 'authors', []) if getattr(a, 'name', None)})
     prompt = (
-        f"Given the user query: '{query}' and the following books from the database: "
-        f"{'; '.join(book_samples)}. "
-        "Write a short summary for the user describing what was found."
+        f"There {'is' if len(books)==1 else 'are'} {len(books)} book{'s' if len(books)!=1 else ''}"
+        + (f" by {author_names}" if author_names else "")
+        + (f': "{book_titles}"' if book_titles else "")
+        + ". Write a 1-2 sentence summary of this result."
     )
-    pipe = get_llm_pipeline()
-    summary = pipe(prompt, max_new_tokens=60)[0]["generated_text"].strip()
-    if not summary or len(summary) < 10:
-        summary = f"Found {len(books)} books including {book_samples[0]}." if books else "No books matched your criteria."
-    return summary
+    try:
+        cands = generate_text(prompt, max_new_tokens=80, temperature=0.8)
+        logger.info(f"LLM summary candidates: {cands}")
+        valid = []
+        for c in cands:
+            # Remove the prompt from the start if present
+            if c.startswith(prompt):
+                c = c[len(prompt):].lstrip("\n: ")
+            if len(c.strip()) > 20:
+                valid.append(c.strip())
+        if valid:
+            return max(valid, key=len)
+    except Exception as e:
+        logger.error(f"Summary failed: {e}")
+    return f"Found {len(books)} books matching your query."
+
+

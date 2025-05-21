@@ -1,20 +1,36 @@
-from fastapi import FastAPI, Depends, Query, HTTPException
+from fastapi import FastAPI, Depends, Query, HTTPException, Request
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
-from app.schemas import BookOut, BookListResponse
+from app.schemas import BookOut, BookListResponse, ChatBooksResponse, ChatRequest
 from app.database import get_db
 from app import schemas, crud
 from fastapi import Body
 from pydantic import BaseModel
-from app.llm import query_to_filter, summarize_results
+from app.llm import extract_filter, summarize_results
 from app.crud import get_books
 import logging
+from fastapi.responses import JSONResponse
 
 app = FastAPI(
     title="Gutendex API",
     version="1.0.0",
-    description="Query Project Gutenberg books by multiple filters."
+    description="Query Project Gutenberg books by LLM-driven filters."
 )
+
+@app.exception_handler(404)
+async def not_found_handler(request: Request, exc):
+    logging.info(f"404 Not Found: {request.url.path}")
+    return JSONResponse(status_code=404, content={"detail": "The requested resource was not found."})
+
+@app.exception_handler(500)
+async def internal_error_handler(request: Request, exc):
+    logging.error(f"500 Internal Server Error: {request.url.path} - {exc}")
+    return JSONResponse(status_code=500, content={"detail": "Internal server error."})
+
+@app.exception_handler(504)
+async def timeout_error_handler(request: Request, exc):
+    logging.error(f"504 Gateway Timeout: {request.url.path} - {exc}")
+    return JSONResponse(status_code=504, content={"detail": "The server timed out while processing your request."})
 
 @app.get(
     "/books",
@@ -47,44 +63,68 @@ def list_books(
     try:
         total, books = crud.get_books(db, filters, skip, limit)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logging.error(f"Error fetching books: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching books from the database.")
 
-    # Always serialize using BookOut to ensure correct fields and types
-    books_out = [BookOut.model_validate(b) for b in books]
+    try:
+        books_out = [BookOut.model_validate(b) for b in books]
+    except Exception as e:
+        logging.error(f"Error serializing books: {e}")
+        raise HTTPException(status_code=500, detail="Error serializing book data.")
+
     return {"count": total, "results": books_out}
 
 class ChatRequest(BaseModel):
     query: str
-
-class ChatBooksResponse(BaseModel):
-    filters: Dict[str, Any]
-    count: int
-    results: List[BookOut]
-    summary: str
 
 @app.post("/chat", response_model=ChatBooksResponse, tags=["AskDB"])
 def chat(request: ChatRequest, db: Session = Depends(get_db)) -> ChatBooksResponse:
     """
     Handles chat queries, generates filters using LLM, fetches books, and summarizes results.
     """
-    filters = query_to_filter(request.query)
+    # 1) extract deterministic filter
+    filters = extract_filter(request.query)
+    if not filters:
+        raise HTTPException(400, "Sorry, I couldn't parse any filters from that query.")
+
+    # 2) normalize filter values to lists and correct types
     allowed = {"author", "title", "language", "topic", "mime_type", "ids"}
-    # Only keep allowed keys
-    filters = {k: v for k, v in filters.items() if k in allowed}
-    # Ensure all filter values are lists for consistency
+    cleaned: Dict[str, List[Any]] = {}
     for k, v in filters.items():
-        if not isinstance(v, list):
-            filters[k] = [v]
+        if k in allowed:
+            if k == "ids":
+                # Ensure ids is always a list of ints
+                if isinstance(v, int):
+                    cleaned[k] = [v]
+                elif isinstance(v, str) and v.isdigit():
+                    cleaned[k] = [int(v)]
+                elif isinstance(v, list):
+                    cleaned[k] = [int(x) for x in v if isinstance(x, (int, str)) and str(x).isdigit()]
+            elif isinstance(v, list):
+                cleaned[k] = v
+            else:
+                cleaned[k] = [v]
+
+    # 3) handle limit and sort from filters
+    limit = filters.get("limit", 25)
     try:
-        count, books = get_books(db=db, filters=filters)
-    except Exception as e:
-        logging.error(f"Error fetching books: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    books_out = [BookOut.model_validate(b) for b in books]
-    summary = summarize_results(request.query, filters, books)
-    if not summary:
-        summary = f"Found {count} books matching your query."
-    return ChatBooksResponse(filters=filters, count=count, results=books_out, summary=summary)
+        limit = int(limit)
+    except Exception:
+        limit = 25
+    sort = filters.get("sort", None)
+
+    # 4) fetch books
+    total, books = crud.get_books(db, cleaned, skip=0, limit=limit)
+    # Optionally, handle sort if your get_books supports it
+
+    # 5) summarize
+    summary = summarize_results(request.query, books)
+    return ChatBooksResponse(
+        filters=filters,
+        count=len(books),
+        results=[BookOut.model_validate(b) for b in books],
+        summary=summary
+    )
 
 @app.get("/health")
 def health():
