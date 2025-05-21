@@ -1,14 +1,14 @@
 from fastapi import FastAPI, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from app.schemas import BookOut, BookListResponse
-
 from app.database import get_db
 from app import schemas, crud
 from fastapi import Body
 from pydantic import BaseModel
 from app.llm import query_to_filter, summarize_results
 from app.crud import get_books
+import logging
 
 app = FastAPI(
     title="Gutendex API",
@@ -57,20 +57,29 @@ class ChatRequest(BaseModel):
     query: str
 
 class ChatBooksResponse(BaseModel):
-    filters: dict
+    filters: Dict[str, Any]
     count: int
-    results: list
+    results: List[BookOut]
     summary: str
 
-@app.post("/chat", response_model=ChatBooksResponse, tags=["Chat"])
-def chat(request: ChatRequest, db=Depends(get_db)):
+@app.post("/chat", response_model=ChatBooksResponse, tags=["AskDB"])
+def chat(request: ChatRequest, db: Session = Depends(get_db)) -> ChatBooksResponse:
+    """
+    Handles chat queries, generates filters using LLM, fetches books, and summarizes results.
+    """
     filters = query_to_filter(request.query)
     allowed = {"author", "title", "language", "topic", "mime_type", "ids"}
+    # Only keep allowed keys
     filters = {k: v for k, v in filters.items() if k in allowed}
+    # Ensure all filter values are lists for consistency
     for k, v in filters.items():
         if not isinstance(v, list):
             filters[k] = [v]
-    count, books = get_books(db=db, filters=filters)
+    try:
+        count, books = get_books(db=db, filters=filters)
+    except Exception as e:
+        logging.error(f"Error fetching books: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     books_out = [BookOut.model_validate(b) for b in books]
     summary = summarize_results(request.query, filters, books)
     if not summary:
